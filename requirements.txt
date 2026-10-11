@@ -1,0 +1,14 @@
+pdf2image>=1.17.0
+pydantic>=2.0.0
+pillow>=10.0.0
+tqdm>=4.66.0
+
+# Local smoke tests
+ollama>=0.4.0
+
+# Kaggle / GPU (install when using --backend qwen_hf)
+torch>=2.1.0
+transformers>=4.45.0
+accelerate>=0.33.0
+qwen-vl-utils>=0.0.8
+bitsandbytes>=0.43.0
