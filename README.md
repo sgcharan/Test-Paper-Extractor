@@ -63,7 +63,7 @@ Push this folder to a **public** repository, for example:
 
 ### 2. Upload PDFs as a Kaggle dataset
 
-Zip your `.pdf` files so they sit at the **root** of the zip (not inside a nested folder only). Create a new Kaggle dataset from that zip, e.g. slug `chemistry-papers`.
+Create a Kaggle dataset from a zip of your PDFs (subfolders are fine — extraction searches recursively). Note the dataset slug for `PDF_INPUT_DIR`.
 
 ### 3. Run the notebook on Kaggle
 

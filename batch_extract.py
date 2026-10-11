@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from extract_paper import build_extraction_only_parser, process_pdf, slugify_pdf_name
+from pdf_discovery import discover_pdfs, format_tree_hint
 from vlm_backends import get_backend
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -32,7 +33,13 @@ def main(argv: list[str] | None = None) -> int:
         "--glob",
         type=str,
         default="*.pdf",
-        help="Glob pattern within pdf_dir",
+        help="Glob pattern within pdf_dir (non-recursive mode only)",
+    )
+    parser.add_argument(
+        "--recursive",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Search subfolders for PDFs (default: true; typical for Kaggle datasets)",
     )
     known, remaining = parser.parse_known_args(argv)
 
@@ -44,10 +51,19 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Not a directory: %s", pdf_dir)
         return 1
 
-    pdfs = sorted(pdf_dir.glob(known.glob))
+    if known.recursive:
+        pdfs = discover_pdfs(pdf_dir, recursive=True)
+    else:
+        pdfs = sorted(pdf_dir.glob(known.glob))
     if not pdfs:
-        logger.error("No PDFs matching %s in %s", known.glob, pdf_dir)
+        logger.error(
+            "No PDFs in %s (recursive=%s). Contents sample:\n  %s",
+            pdf_dir,
+            known.recursive,
+            format_tree_hint(pdf_dir),
+        )
         return 1
+    logger.info("Found %s PDF(s) under %s", len(pdfs), pdf_dir)
 
     shared_backend = None
     if single_args.backend == "qwen_hf":
