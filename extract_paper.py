@@ -43,6 +43,15 @@ def save_checkpoint(path: Path, checkpoint: PageCheckpoint) -> None:
     )
 
 
+def qwen_backend_kwargs_from_args(args: argparse.Namespace) -> dict:
+    return {
+        "model_id": args.qwen_model,
+        "load_in_4bit": not args.no_4bit,
+        "max_vlm_side": args.max_vlm_side,
+        "max_new_tokens": args.max_new_tokens,
+    }
+
+
 def process_pdf(
     pdf_path: Path,
     out_dir: Path,
@@ -60,7 +69,7 @@ def process_pdf(
     crops_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = out_dir / CHECKPOINT_NAME
 
-    checkpoint = load_checkpoint(checkpoint_path)
+    checkpoint = load_checkpoint(path=checkpoint_path)
     if checkpoint is None:
         checkpoint = PageCheckpoint(
             pdf_path=str(pdf_path.resolve()),
@@ -121,6 +130,8 @@ def process_pdf(
         checkpoint.page_extractions.append(extraction)
         checkpoint.last_completed_page = page_index
         save_checkpoint(checkpoint_path, checkpoint)
+        # Drop full-page bitmap from RAM during long papers (re-render for merge if needed).
+        page_images.pop(page_index, None)
 
     for page_index in range(len(checkpoint.page_extractions)):
         if page_index not in page_images:
@@ -192,13 +203,25 @@ def add_extraction_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--qwen-model",
         type=str,
-        default="Qwen/Qwen2.5-VL-7B-Instruct",
+        default="Qwen/Qwen2.5-VL-3B-Instruct",
         help="Hugging Face model id for qwen_hf backend",
     )
     parser.add_argument(
         "--no-4bit",
         action="store_true",
         help="Disable 4-bit quantization for qwen_hf",
+    )
+    parser.add_argument(
+        "--max-vlm-side",
+        type=int,
+        default=1280,
+        help="Longest image side sent to VLM (default: 1280; lowers GPU memory)",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=2048,
+        help="Max tokens generated per page (default: 2048)",
     )
     parser.add_argument(
         "--save-page-images",
@@ -250,10 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             "host": args.ollama_host,
         }
     else:
-        backend_kwargs = {
-            "model_id": args.qwen_model,
-            "load_in_4bit": not args.no_4bit,
-        }
+        backend_kwargs = qwen_backend_kwargs_from_args(args)
 
     try:
         process_pdf(

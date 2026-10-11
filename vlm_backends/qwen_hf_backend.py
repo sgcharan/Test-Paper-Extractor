@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import gc
 import json
+import logging
 import re
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import torch
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
+from image_utils import resize_for_vlm
 from schemas import PageExtraction
 from vlm_backends.base import VisionBackend
 from vlm_backends.prompts import RETRY_FIX_JSON_PROMPT, build_page_prompt
 
 if TYPE_CHECKING:
     from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 try:
     from qwen_vl_utils import process_vision_info
@@ -40,42 +45,74 @@ def _parse_json_content(raw: str) -> dict:
     return json.loads(text)
 
 
+def _release_cuda_memory() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 class QwenHFVisionBackend(VisionBackend):
     def __init__(
         self,
-        model_id: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+        model_id: str = "Qwen/Qwen2.5-VL-3B-Instruct",
         load_in_4bit: bool = True,
         temperature: float = 0.1,
-        max_new_tokens: int = 4096,
+        max_new_tokens: int = 2048,
+        max_vlm_side: int = 1280,
     ) -> None:
         self.model_id = model_id
         self.temperature = temperature
         self.max_new_tokens = max_new_tokens
+        self.max_vlm_side = max_vlm_side
 
         quantization_config = None
+        model_kwargs: dict = {
+            "trust_remote_code": True,
+            "device_map": "auto",
+            "low_cpu_mem_usage": True,
+        }
         if load_in_4bit:
             from transformers import BitsAndBytesConfig
 
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+            model_kwargs["quantization_config"] = quantization_config
+        else:
+            model_kwargs["torch_dtype"] = (
+                torch.float16 if torch.cuda.is_available() else torch.float32
             )
 
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        try:
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_id,
+                attn_implementation="sdpa",
+                **model_kwargs,
+            )
+        except TypeError:
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_id,
+                **model_kwargs,
+            )
+        self.model.eval()
+        logger.info(
+            "Loaded %s (4bit=%s, max_vlm_side=%s)",
             model_id,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto",
-            quantization_config=quantization_config,
-            trust_remote_code=True,
+            load_in_4bit,
+            max_vlm_side,
         )
 
     def _generate(self, prompt: str, page_image: Image.Image) -> str:
+        vlm_image = resize_for_vlm(page_image, max_side=self.max_vlm_side)
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "image", "image": page_image},
+                    {"type": "image", "image": vlm_image},
                     {"type": "text", "text": prompt},
                 ],
             }
@@ -93,20 +130,24 @@ class QwenHFVisionBackend(VisionBackend):
         )
         inputs = inputs.to(self.model.device)
 
-        with torch.no_grad():
-            generated_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=self.max_new_tokens,
-                temperature=self.temperature if self.temperature > 0 else None,
-                do_sample=self.temperature > 0,
-            )
-        trimmed = [
-            out_ids[len(in_ids) :]
-            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-        ]
-        return self.processor.batch_decode(
-            trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-        )[0]
+        try:
+            with torch.inference_mode():
+                generated_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=self.temperature if self.temperature > 0 else None,
+                    do_sample=self.temperature > 0,
+                )
+            trimmed = [
+                out_ids[len(in_ids) :]
+                for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+            ]
+            return self.processor.batch_decode(
+                trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )[0]
+        finally:
+            del inputs
+            _release_cuda_memory()
 
     def extract_page(self, page_image: Image.Image, page_index: int) -> PageExtraction:
         prompt = build_page_prompt(page_index)

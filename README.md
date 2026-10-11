@@ -46,10 +46,8 @@ python preview.py --questions out/paper_slug/questions.json
 ## Batch
 
 ```bash
-python batch_extract.py path/to/pdf_folder --out-root out --backend qwen_hf -- --dpi 300
+python batch_extract.py path/to/pdf_folder --out-root out --backend qwen_hf --dpi 300
 ```
-
-(Place backend flags after `--` when using `batch_extract.py`.)
 
 ## Kaggle
 
@@ -76,6 +74,10 @@ Create a Kaggle dataset from a zip of your PDFs (subfolders are fine — extract
 5. **Run all** → download **`out.zip`** from the Output panel.
 
 To update extraction logic later, `git push` to GitHub and re-run the notebook (it clones fresh each time).
+
+**GPU memory (T4 15GB)**: defaults use **Qwen2.5-VL-3B** in 4-bit and resize pages to **1280px** for the VLM (crops still use full 300 DPI). If you still hit OOM, set `MAX_VLM_SIDE = 1024` or `--dpi 200` in the notebook.
+
+If `git clone` fails with *Unable to read current working directory*, use **Restart session** and run from the top (you re-ran the clone cell while the kernel was still inside the old clone folder).
 
 ## Output shape
 

@@ -11,6 +11,17 @@ from PIL import Image
 from schemas import StructureRef
 
 
+def resize_for_vlm(image: Image.Image, max_side: int = 1280) -> Image.Image:
+    """Downscale page image for VLM inference; crops still use full-resolution render."""
+    w, h = image.size
+    longest = max(w, h)
+    if longest <= max_side:
+        return image
+    scale = max_side / longest
+    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    return image.resize(new_size, Image.Resampling.LANCZOS)
+
+
 def render_pdf_page(
     pdf_path: str,
     page_index: int,

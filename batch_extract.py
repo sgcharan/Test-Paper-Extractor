@@ -8,7 +8,12 @@ import logging
 import sys
 from pathlib import Path
 
-from extract_paper import build_extraction_only_parser, process_pdf, slugify_pdf_name
+from extract_paper import (
+    add_extraction_arguments,
+    process_pdf,
+    qwen_backend_kwargs_from_args,
+    slugify_pdf_name,
+)
 from pdf_discovery import discover_pdfs, format_tree_hint
 from vlm_backends import get_backend
 
@@ -16,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_batch_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Batch extract chemistry PDFs.")
     parser.add_argument(
         "pdf_dir",
@@ -41,66 +46,61 @@ def main(argv: list[str] | None = None) -> int:
         default=True,
         help="Search subfolders for PDFs (default: true; typical for Kaggle datasets)",
     )
-    known, remaining = parser.parse_known_args(argv)
+    add_extraction_arguments(parser)
+    return parser
 
-    single_parser = build_extraction_only_parser()
-    single_args = single_parser.parse_args(remaining)
 
-    pdf_dir = known.pdf_dir.resolve()
+def main(argv: list[str] | None = None) -> int:
+    args = build_batch_parser().parse_args(argv)
+
+    pdf_dir = args.pdf_dir.resolve()
     if not pdf_dir.is_dir():
         logger.error("Not a directory: %s", pdf_dir)
         return 1
 
-    if known.recursive:
+    if args.recursive:
         pdfs = discover_pdfs(pdf_dir, recursive=True)
     else:
-        pdfs = sorted(pdf_dir.glob(known.glob))
+        pdfs = sorted(pdf_dir.glob(args.glob))
     if not pdfs:
         logger.error(
             "No PDFs in %s (recursive=%s). Contents sample:\n  %s",
             pdf_dir,
-            known.recursive,
+            args.recursive,
             format_tree_hint(pdf_dir),
         )
         return 1
     logger.info("Found %s PDF(s) under %s", len(pdfs), pdf_dir)
 
     shared_backend = None
-    if single_args.backend == "qwen_hf":
+    if args.backend == "qwen_hf":
         logger.info("Loading Qwen HF model once for batch...")
-        shared_backend = get_backend(
-            "qwen_hf",
-            model_id=single_args.qwen_model,
-            load_in_4bit=not single_args.no_4bit,
-        )
+        shared_backend = get_backend("qwen_hf", **qwen_backend_kwargs_from_args(args))
 
     manifest_entries = []
     for pdf_path in pdfs:
-        out_dir = known.out_root / slugify_pdf_name(pdf_path)
+        out_dir = args.out_root / slugify_pdf_name(pdf_path)
         logger.info("=== %s -> %s ===", pdf_path.name, out_dir)
         backend_kwargs: dict = {}
-        if single_args.backend == "ollama":
+        if args.backend == "ollama":
             backend_kwargs = {
-                "model": single_args.ollama_model,
-                "host": single_args.ollama_host,
+                "model": args.ollama_model,
+                "host": args.ollama_host,
             }
         else:
-            backend_kwargs = {
-                "model_id": single_args.qwen_model,
-                "load_in_4bit": not single_args.no_4bit,
-            }
+            backend_kwargs = qwen_backend_kwargs_from_args(args)
 
         try:
             json_path = process_pdf(
                 pdf_path=pdf_path.resolve(),
                 out_dir=out_dir.resolve(),
-                dpi=single_args.dpi,
-                start_page=single_args.start_page,
-                backend_name=single_args.backend,
-                poppler_path=single_args.poppler_path,
-                title=single_args.title,
+                dpi=args.dpi,
+                start_page=args.start_page,
+                backend_name=args.backend,
+                poppler_path=args.poppler_path,
+                title=args.title,
                 backend_kwargs=backend_kwargs,
-                save_page_images=single_args.save_page_images,
+                save_page_images=args.save_page_images,
                 backend=shared_backend,
             )
             data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -125,8 +125,8 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
 
-    manifest_path = known.out_root / "manifest.json"
-    known.out_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = args.out_root / "manifest.json"
+    args.out_root.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         json.dumps(manifest_entries, indent=2, ensure_ascii=False),
         encoding="utf-8",
