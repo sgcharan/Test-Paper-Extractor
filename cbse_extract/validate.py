@@ -53,11 +53,22 @@ def validate_record(rec: dict) -> list[str]:
     return flags
 
 
-def validate_paper(records: list[dict], orphan_answers: list[dict]) -> list[str]:
+def validate_paper(records: list[dict], orphan_answers: list[dict], declared_total: float | None = None) -> list[str]:
     flags = []
-    main_total = sum(r["marks"] for r in records if r.get("or_alt", 0) == 0)
-    if abs(main_total - EXPECTED_TOTAL) > 0.01:
-        flags.append(f"sum of marks for main questions = {main_total}, expected {EXPECTED_TOTAL}")
+    # Term papers are 35 marks; trust the printed total when it is plausible, else assume the 70-mark paper.
+    expected = declared_total if declared_total and 20 <= declared_total <= 100 else EXPECTED_TOTAL
+    main = [r for r in records if r.get("or_alt", 0) == 0]
+    main_total = sum(r["marks"] for r in main)
+    # Marks that are not multiples of 0.5 (e.g. 0.77 per MCQ in the 2021 Term 1 papers) mean the paper
+    # scales "attempt any N" marks, so the printed sum legitimately exceeds the total.
+    scaled = any((r["marks"] * 2) % 1 > 0.01 for r in main)
+    if not scaled and abs(main_total - expected) > 0.01:
+        msg = f"sum of marks for main questions = {main_total}, expected {expected:g}"
+        nums = sorted({int(str(r["q_no"])) for r in records if str(r["q_no"]).isdigit()})
+        gaps = [n for n in range(nums[0], nums[-1] + 1) if n not in nums] if nums else []
+        if gaps:
+            msg += f" (question number(s) missing from the extraction: {', '.join(map(str, gaps))})"
+        flags.append(msg)
     if orphan_answers:
         flags.append(f"{len(orphan_answers)} marking-scheme entries matched no question: "
                      + ", ".join(f"{a['q_no']}{a.get('sub_part') or ''}/{a.get('or_alt', 0)}" for a in orphan_answers))
