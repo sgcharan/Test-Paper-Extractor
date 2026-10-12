@@ -80,6 +80,9 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
             code = getattr(e, "code", None)
             retryable = code in RETRYABLE_CODES if code is not None else any(
                 s in str(e) for s in ("429", "503", "UNAVAILABLE"))
+            if code == 429 and "PerDay" in str(e):  # daily quota: backoff cannot help, stop the batch now
+                raise FatalAPIError(f"Gemini daily quota exhausted for {MODEL} (resets within 24h; "
+                                    f"cache keeps progress): {str(e)[:300]}") from e
             if retryable:
                 wait = 5 * 2 ** attempt
                 print(f"  rate-limited/unavailable ({code}), sleeping {wait}s ...")
