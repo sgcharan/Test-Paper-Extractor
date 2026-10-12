@@ -3,6 +3,8 @@ import re
 
 UNICODE_SUBSUP = re.compile("[\u2080-\u2089\u2070\u00b9\u00b2\u00b3\u2074-\u2079\u207a\u207b\u208a\u208b]")
 EXPECTED_TOTAL = 70  # CBSE Class 12 Chemistry theory paper
+# "Attempt any five of the following" / "(Any three)": the scheme lists every part, so step marks exceed the question marks.
+CHOICE_RE = re.compile(r"\bany\s+(one|two|three|four|five|six|seven|\d+)\b", re.I)
 
 
 def _balanced_ce(text: str) -> bool:
@@ -35,7 +37,8 @@ def validate_record(rec: dict) -> list[str]:
         flags.append("no matching answer in marking scheme")
     else:
         steps = ans.get("steps") or []
-        if steps and all(s.get("marks") is not None for s in steps):
+        is_choice = bool(CHOICE_RE.search(qt) or CHOICE_RE.search(at))
+        if steps and not is_choice and all(s.get("marks") is not None for s in steps):
             total = sum(s["marks"] for s in steps)
             if abs(total - (rec.get("marks") or 0)) > 0.01:
                 flags.append(f"step marks sum {total} != question marks {rec.get('marks')}")

@@ -6,11 +6,12 @@ Each PDF holds the questions followed by the answers / marking scheme at the end
 so every PDF is one paper (paper id = file name without extension).
 """
 import argparse
+import csv
 import json
 import re
 from pathlib import Path
 
-from .gemini_client import extract
+from .gemini_client import FatalAPIError, extract
 from .pdf_utils import build_parts, crop_figure
 from .prompts import PAPER_PROMPT
 from .schemas import Paper
@@ -60,6 +61,70 @@ def process_figures(pdf: Path, items: list[dict], fig_dir: Path, tag: str, struc
                     fig["smiles"] = image_to_smiles(out)  # None if invalid; always verify by eye
 
 
+def process_pdf(pdf: Path, out_dir: Path, cache: Path, fig_dir: Path, structures: bool):
+    """Extract one PDF; returns (question rows, review items, usage)."""
+    rows, review = [], []
+    pid = pdf.stem
+    parts, page_report = build_parts(pdf)
+    paper, usage = extract(pdf, parts, PAPER_PROMPT, Paper, cache)
+    questions = [q.model_dump(mode="json") for q in paper.questions]
+    answers = [a.model_dump(mode="json") for a in paper.answers]
+    process_figures(pdf, questions, fig_dir, pid + "_q", structures)
+    process_figures(pdf, answers, fig_dir, pid + "_a", structures)
+
+    ans_by_key = {key(a): a for a in answers}
+    used = set()
+    # Sub-part questions whose scheme is one combined block (sub_part None): split it by order.
+    parts_by_qa = {}
+    for q in questions:
+        if q.get("sub_part") and key(q) not in ans_by_key:
+            parts_by_qa.setdefault((str(q["q_no"]).strip(), q.get("or_alt", 0)), []).append(q)
+    split_ans = {}
+    for (qn, alt), qs in parts_by_qa.items():
+        combined_key = (qn, "", alt)
+        combined = ans_by_key.get(combined_key)
+        pieces = split_combined_answer(combined, len(qs)) if combined else None
+        if pieces:
+            used.add(combined_key)
+            for q, piece in zip(qs, pieces):
+                piece["sub_part"] = q["sub_part"]
+                split_ans[key(q)] = piece
+    for q in questions:
+        a = ans_by_key.get(key(q)) or split_ans.get(key(q))
+        if a:
+            used.add(key(q))
+        q["answer"] = a
+        q["paper_id"] = pid
+        q["flags"] = validate_record(q)
+        rows.append(q)
+        if q["flags"]:
+            review.append((pid, q["q_no"], q.get("sub_part"), q["flags"]))
+    orphans = [a for k, a in ans_by_key.items() if k not in used]
+    paper_flags = validate_paper(questions, orphans) if questions else ["no questions extracted"]
+    for f in paper_flags:
+        review.append((pid, "PAPER", None, [f]))
+
+    (out_dir / f"{pid}.json").write_text(json.dumps(
+        {"paper_id": pid, "exam_year": paper.exam_year, "paper_code": paper.paper_code,
+         "total_marks": paper.total_marks, "pages": page_report, "paper_flags": paper_flags,
+         "usage": usage, "questions": questions, "orphan_answers": orphans}, ensure_ascii=False, indent=1), encoding="utf-8")
+    return rows, review, usage
+
+
+def write_usage(out_dir: Path, rows: list[dict]):
+    """usage.csv: one row per PDF plus a total. Cached rows show the tokens spent when first fetched."""
+    cols = ["paper_id", "model", "prompt_tokens", "output_tokens", "thinking_tokens", "total_tokens", "cached"]
+    with open(out_dir / "usage.csv", "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow([r.get(c, "") for c in cols])
+        w.writerow(["TOTAL", ""] + [sum(r.get(c, 0) or 0 for r in rows) for c in cols[2:6]] + [""])
+    if rows:
+        t = sum(r.get("total_tokens", 0) or 0 for r in rows)
+        print(f"Tokens: {t:,} across {len(rows)} PDFs (avg {t // len(rows):,}) -> {out_dir / 'usage.csv'}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdf-dir", type=Path, required=True)
@@ -74,52 +139,29 @@ def main():
     fig_dir = args.out / "figures"
     all_rows, review = [], []
 
-    for pdf in pdfs:
-        pid = pdf.stem
-        print(f"== {pid}")
-        parts, page_report = build_parts(pdf)
-        paper = extract(pdf, parts, PAPER_PROMPT, Paper, cache)
-        questions = [q.model_dump(mode="json") for q in paper.questions]
-        answers = [a.model_dump(mode="json") for a in paper.answers]
-        process_figures(pdf, questions, fig_dir, pid + "_q", args.structures)
-        process_figures(pdf, answers, fig_dir, pid + "_a", args.structures)
-
-        ans_by_key = {key(a): a for a in answers}
-        used = set()
-        # Sub-part questions whose scheme is one combined block (sub_part None): split it by order.
-        parts_by_qa = {}
-        for q in questions:
-            if q.get("sub_part") and key(q) not in ans_by_key:
-                parts_by_qa.setdefault((str(q["q_no"]).strip(), q.get("or_alt", 0)), []).append(q)
-        split_ans = {}
-        for (qn, alt), qs in parts_by_qa.items():
-            combined_key = (qn, "", alt)
-            combined = ans_by_key.get(combined_key)
-            pieces = split_combined_answer(combined, len(qs)) if combined else None
-            if pieces:
-                used.add(combined_key)
-                for q, piece in zip(qs, pieces):
-                    piece["sub_part"] = q["sub_part"]
-                    split_ans[key(q)] = piece
-        for q in questions:
-            a = ans_by_key.get(key(q)) or split_ans.get(key(q))
-            if a:
-                used.add(key(q))
-            q["answer"] = a
-            q["paper_id"] = pid
-            q["flags"] = validate_record(q)
-            all_rows.append(q)
-            if q["flags"]:
-                review.append((pid, q["q_no"], q.get("sub_part"), q["flags"]))
-        orphans = [a for k, a in ans_by_key.items() if k not in used]
-        paper_flags = validate_paper(questions, orphans) if questions else ["no questions extracted"]
-        for f in paper_flags:
-            review.append((pid, "PAPER", None, [f]))
-
-        (args.out / f"{pid}.json").write_text(json.dumps(
-            {"paper_id": pid, "exam_year": paper.exam_year, "paper_code": paper.paper_code,
-             "total_marks": paper.total_marks, "pages": page_report, "paper_flags": paper_flags,
-             "questions": questions, "orphan_answers": orphans}, ensure_ascii=False, indent=1), encoding="utf-8")
+    usage_rows = []
+    try:
+        for pdf in pdfs:
+            pid = pdf.stem
+            print(f"== {pid}")
+            try:
+                rows, rev, usage = process_pdf(pdf, args.out, cache, fig_dir, args.structures)
+            except FatalAPIError as e:
+                review.append((pid, "PAPER", None, [f"extraction aborted: {e}"]))
+                print(f"  FATAL, stopping batch: {e}")
+                break
+            except Exception as e:  # noqa: BLE001  one bad PDF must not lose the rest of the batch
+                review.append((pid, "PAPER", None, [f"extraction failed: {type(e).__name__}: {str(e)[:200]}"]))
+                print(f"  FAILED, continuing: {type(e).__name__}: {str(e)[:200]}")
+                continue
+            all_rows.extend(rows)
+            review.extend(rev)
+            usage_rows.append({"paper_id": pid, **usage})
+            print(f"  tokens: prompt {usage['prompt_tokens']:,} + output {usage['output_tokens']:,} "
+                  f"+ thinking {usage['thinking_tokens']:,} = {usage['total_tokens']:,}"
+                  f"{' (cached)' if usage.get('cached') else ''}")
+    finally:
+        write_usage(args.out, usage_rows)
 
     with open(args.out / "all.jsonl", "w", encoding="utf-8") as f:
         for r in all_rows:

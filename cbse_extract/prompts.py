@@ -9,9 +9,18 @@ Rules:
   Write maths/units in LaTeX too (e.g. $k = 2.3 \times 10^{-3}\ s^{-1}$).
 - Do NOT try to transcribe structural diagrams. Instead add a Figure entry with the page number and a
   tight bounding box [ymin, xmin, ymax, xmax] normalised to 0-1000, and write "[FIGURE]" at that place in the text.
-- Papers may be bilingual (English + Hindi/other). Put English in the main text field and the other
-  language in the *_alt field of the SAME record. Never create two records for one question.
-- 'OR' alternatives: same q_no, or_alt = 1. Sub-parts: sub_part = 'a','b','i','ii'.
+- Papers may be bilingual (English + Hindi/other). Extract ENGLISH ONLY: completely ignore the Hindi/other-language
+  text and never output it. Never create two records for one question.
+- 'OR' alternatives: same q_no, or_alt = 1. Parts joined by 'OR' are alternatives, not sub-parts.
+- Sub-parts: split ONLY when the question paper itself prints labelled sub-parts ((a)/(b), (i)/(ii)/(iii)).
+  Then output one record per printed label, with sub_part set to that label ('a','b','i','ii'), repeating any
+  shared stem or passage at the start of each question_text; marks = that part's own marks (the parts must add
+  up to the question's total). Use ONE level only: the outermost printed label. Labels nested inside a part,
+  e.g. (a) containing (i)(ii)(iii), stay inside that part's question_text and answer; never output 'a(i)'.
+  Exception - choice questions ("Attempt any five of the following", "(Any three)"): output ONE record with
+  sub_part = null, all parts inside question_text, marks = the question's total, and ONE answer listing every part. If a question has no printed labels, output ONE record with sub_part = null,
+  even if its answer lists marks per line or it has several sentences or clauses. If the marking scheme gives
+  one combined block for a question with labelled sub-parts, still output one answer per sub-part.
 - Copy numbers, marks and question numbers exactly as printed. Never invent content; if illegible, write [ILLEGIBLE].
 - Include every question/answer in the document, in order.
 """

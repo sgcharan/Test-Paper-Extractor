@@ -5,7 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")  # change if a newer free model exists
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")  # change if a newer free model exists
 
 # Rationalised syllabus plus chapters found in older (pre-2023) papers.
 CHAPTERS = [
@@ -56,8 +56,6 @@ class QuestionItem(BaseModel):
     marks: float
     qtype: str = Field(description="mcq | assertion_reason | very_short | short | long | case_based | value_based")
     question_text: str = Field(description="Full question in English. Chemistry in \\ce{...} / LaTeX.")
-    question_text_alt: Optional[str] = Field(default=None, description="Same question in the other language, if printed")
-    alt_language: Optional[str] = None
     options: Optional[list[str]] = Field(default=None, description="MCQ options, in order")
     is_case_based: bool = False
     chapter: Chapter
