@@ -7,18 +7,24 @@ from pydantic import BaseModel, Field
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")  # change if a newer free model exists
 
-# Current rationalised syllabus. Older papers may need extra chapters -> add them here.
+# Rationalised syllabus plus chapters found in older (pre-2023) papers.
 CHAPTERS = [
+    "Solid State",
     "Solutions",
     "Electrochemistry",
     "Chemical Kinetics",
     "d- and f-Block Elements",
+    "Surface Chemistry",
+    "General Principles of Isolation of Elements",
+    "p-Block Elements",
     "Coordination Compounds",
     "Haloalkanes and Haloarenes",
     "Alcohols, Phenols and Ethers",
     "Aldehydes, Ketones and Carboxylic Acids",
     "Amines",
     "Biomolecules",
+    "Polymers",
+    "Chemistry in Everyday Life",
     "Other / Unknown",
 ]
 COGNITIVE = [
@@ -48,7 +54,7 @@ class QuestionItem(BaseModel):
     or_alt: int = Field(default=0, description="0 = main question, 1 = the 'OR' alternative")
     section: str = Field(description="A, B, C, D or E")
     marks: float
-    qtype: str = Field(description="mcq | assertion_reason | very_short | short | long | case_based")
+    qtype: str = Field(description="mcq | assertion_reason | very_short | short | long | case_based | value_based")
     question_text: str = Field(description="Full question in English. Chemistry in \\ce{...} / LaTeX.")
     question_text_alt: Optional[str] = Field(default=None, description="Same question in the other language, if printed")
     alt_language: Optional[str] = None

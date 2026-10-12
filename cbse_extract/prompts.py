@@ -26,7 +26,7 @@ different order or format; use the question number printed there.
 
 QUESTIONS
 - section: the section letter (A-E) the question falls under, from the section headers.
-- marks: marks for that question (or sub-part if marked separately). qtype: mcq | assertion_reason | very_short | short | long | case_based.
+- marks: marks for that question (or sub-part if marked separately). qtype: mcq | assertion_reason | very_short | short | long | case_based | value_based (the 'value based question' with a social/ethical context).
 - For case-based questions: repeat the case passage at the start of question_text of each sub-question, set is_case_based = true.
 - For MCQs fill `options` in order.
 - chapter: choose exactly one of {CHAPTERS}.
