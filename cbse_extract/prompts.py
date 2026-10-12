@@ -9,8 +9,8 @@ Rules:
   Write maths/units in LaTeX too (e.g. $k = 2.3 \times 10^{-3}\ s^{-1}$).
 - Do NOT try to transcribe structural diagrams. Instead add a Figure entry with the page number and a
   tight bounding box [ymin, xmin, ymax, xmax] normalised to 0-1000, and write "[FIGURE]" at that place in the text.
-- Papers may be bilingual (English + Hindi/other). Put English in the main text field and the other
-  language in the *_alt field of the SAME record. Never create two records for one question.
+- Papers may be bilingual (English + Hindi/other). Extract ENGLISH ONLY: completely ignore the Hindi/other-language
+  text and never output it. Never create two records for one question.
 - 'OR' alternatives: same q_no, or_alt = 1. Sub-parts: sub_part = 'a','b','i','ii'.
 - Copy numbers, marks and question numbers exactly as printed. Never invent content; if illegible, write [ILLEGIBLE].
 - Include every question/answer in the document, in order.

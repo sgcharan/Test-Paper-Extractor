@@ -18,12 +18,26 @@ def text_is_reliable(text: str) -> bool:
     return ok / len(t) > 0.9
 
 
+def english_only(text: str, max_nonascii: float = 0.2) -> str:
+    """Drop lines that are not English. Hindi in these PDFs is legacy-font text that extracts as
+    Latin-1 garbage (e.g. 'ŸÖß¾ÖÎŸÖÖ ÃÖê Ûú¸êüÝÖÖ'), so detect it by its share of non-ASCII characters."""
+    keep = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s:
+            bad = sum(1 for c in s if ord(c) > 127 and c not in SAFE_PUNCT)
+            if bad / len(s) > max_nonascii:
+                continue
+        keep.append(line)
+    return "\n".join(keep)
+
+
 def build_parts(pdf_path: Path):
     """Return (gemini_parts, per_page_report)."""
     doc = fitz.open(pdf_path)
     parts, report = [], []
     for i, page in enumerate(doc, start=1):
-        text = page.get_text("text")
+        text = english_only(page.get_text("text"))
         digital = text_is_reliable(text)
         report.append({"page": i, "mode": "digital" if digital else "image-only"})
         img = page.get_pixmap(dpi=SEND_DPI).tobytes("jpeg", jpg_quality=85)
