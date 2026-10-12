@@ -13,7 +13,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from .gemini_client import FatalAPIError, extract
+from .gemini_client import FatalAPIError, RecitationBlocked, extract
 from .pdf_utils import build_parts, crop_figure
 from .prompts import PAPER_PROMPT
 from .schemas import Paper
@@ -122,6 +122,8 @@ def _worker(job):
         return ("ok", pdf.stem, rows, rev, usage, time.time() - t0)
     except FatalAPIError as e:
         return ("fatal", pdf.stem, str(e), None, None, time.time() - t0)
+    except RecitationBlocked as e:
+        return ("skipped", pdf.stem, str(e), None, None, time.time() - t0)
     except Exception as e:  # noqa: BLE001  one bad PDF must not lose the rest of the batch
         return ("fail", pdf.stem, f"{type(e).__name__}: {str(e)[:200]}", None, None, time.time() - t0)
 
@@ -162,6 +164,7 @@ def main():
     done = 0
     t_start = time.time()
     results = {}
+    skipped = []
     jobs = [(pdf, args.out, cache, fig_dir, args.structures) for pdf in pdfs]
     try:
         # Rerunning is free for finished PDFs: _worker hits the on-disk cache (and its usage sidecar).
@@ -177,6 +180,11 @@ def main():
                     for f in futs:
                         f.cancel()
                     break
+                if kind == "skipped":
+                    skipped.append((pid, a))
+                    review.append((pid, "PAPER", None, ["skipped: Gemini RECITATION block (not retried)"]))
+                    print(f"{prefix}: SKIPPED (recitation block, not retried)")
+                    continue
                 if kind == "fail":
                     review.append((pid, "PAPER", None, [f"extraction failed: {a}"]))
                     print(f"{prefix}: FAILED, continuing: {a}")
@@ -194,6 +202,14 @@ def main():
               f"with {args.workers} worker(s)")
     finally:
         write_usage(args.out, usage_rows)
+        if skipped:
+            with open(args.out / "skipped.md", "w", encoding="utf-8") as f:
+                f.write(f"# Skipped papers ({len(skipped)})\n\n"
+                        "Gemini's recitation filter blocked these; they are not retried. "
+                        "Enter them manually or try another model/pipeline.\n\n")
+                for pid, why in sorted(skipped):
+                    f.write(f"- {pid}: {why[:160]}\n")
+            print(f"Skipped {len(skipped)} paper(s) -> {args.out / 'skipped.md'}")
 
     with open(args.out / "all.jsonl", "w", encoding="utf-8") as f:
         for r in all_rows:

@@ -21,6 +21,11 @@ class EmptyResponseError(RuntimeError):
     """The model returned no text at all (token limit hit while thinking, safety block, ...)."""
 
 
+class RecitationBlocked(RuntimeError):
+    """Gemini's recitation filter blocked the output. Retrying (any temperature, any Flash model) does not
+    help, so the paper is skipped and remembered in the cache folder instead of being retried."""
+
+
 class FatalAPIError(RuntimeError):
     """Retrying cannot help (bad key, no credits, retired model, quota exhausted): stop the batch."""
 
@@ -66,6 +71,9 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
             print(f"  ignoring corrupt cache file {cache_file.name}, re-fetching")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
+    skip_file = cache_dir / f"{key}.skipped.json"
+    if skip_file.exists():
+        raise RecitationBlocked(json.loads(skip_file.read_text(encoding="utf-8")).get("reason", "RECITATION"))
     empty = 0
     for attempt in range(6):
         try:
@@ -80,6 +88,10 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
             )
             if resp.parsed is None and not resp.text:
                 cand = resp.candidates[0] if getattr(resp, "candidates", None) else None
+                if "RECITATION" in str(getattr(cand, "finish_reason", "")):
+                    reason = f"RECITATION block on {MODEL} (usage={_usage_dict(resp)})"
+                    skip_file.write_text(json.dumps({"reason": reason}), encoding="utf-8")
+                    raise RecitationBlocked(reason)
                 raise EmptyResponseError(
                     f"empty response (finish_reason={getattr(cand, 'finish_reason', None)}, "
                     f"prompt_feedback={getattr(resp, 'prompt_feedback', None)}, usage={_usage_dict(resp)})")
@@ -90,6 +102,8 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
             time.sleep(min_interval)  # stay under free-tier requests/minute
             return result, usage
         except Exception as e:  # noqa: BLE001
+            if isinstance(e, RecitationBlocked):
+                raise
             if isinstance(e, EmptyResponseError):
                 empty += 1
                 if empty >= 3:
