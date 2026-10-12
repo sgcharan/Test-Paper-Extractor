@@ -76,7 +76,7 @@ def main():
         (args.out / f"{pid}.json").write_text(json.dumps(
             {"paper_id": pid, "exam_year": paper.exam_year, "paper_code": paper.paper_code,
              "total_marks": paper.total_marks, "pages": page_report, "paper_flags": paper_flags,
-             "questions": questions, "orphan_answers": orphans}, ensure_ascii=False, indent=1))
+             "questions": questions, "orphan_answers": orphans}, ensure_ascii=False, indent=1), encoding="utf-8")
 
     with open(args.out / "all.jsonl", "w", encoding="utf-8") as f:
         for r in all_rows:

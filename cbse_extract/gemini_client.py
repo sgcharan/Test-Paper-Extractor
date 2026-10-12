@@ -26,7 +26,10 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
     ).hexdigest()[:24]
     cache_file = cache_dir / f"{key}.json"
     if cache_file.exists():
-        return schema.model_validate_json(cache_file.read_text())
+        try:
+            return schema.model_validate_json(cache_file.read_text(encoding="utf-8"))
+        except ValueError:
+            print(f"  ignoring corrupt cache file {cache_file.name}, re-fetching")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     for attempt in range(6):
@@ -41,7 +44,7 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
                 ),
             )
             result = resp.parsed if resp.parsed is not None else schema.model_validate_json(resp.text)
-            cache_file.write_text(result.model_dump_json(indent=1))
+            cache_file.write_text(result.model_dump_json(indent=1), encoding="utf-8")
             time.sleep(min_interval)  # stay under free-tier requests/minute
             return result
         except Exception as e:  # noqa: BLE001
