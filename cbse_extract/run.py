@@ -7,6 +7,7 @@ so every PDF is one paper (paper id = file name without extension).
 """
 import argparse
 import json
+import re
 from pathlib import Path
 
 from .gemini_client import extract
@@ -18,6 +19,33 @@ from .validate import validate_paper, validate_record
 
 def key(item: dict):
     return (str(item["q_no"]).strip(), (item.get("sub_part") or "").strip().lower(), item.get("or_alt", 0))
+
+
+_MARKER = re.compile(r"^\s*\(?\s*([a-z]|[ivx]+|\d+)\s*\)\s*", re.I)
+
+
+def split_combined_answer(ans: dict, n_parts: int):
+    """Split one marking-scheme block covering (a)/(b) or (i)..(iv) into n_parts per-sub-part answers.
+
+    Steps starting with a marker open a new group; unmarked steps continue the current one.
+    Returns None unless the number of groups equals n_parts (the marker style may differ
+    between question and scheme, e.g. (a)/(b) vs (i)/(ii), so assignment is by order).
+    """
+    groups = []
+    for s in ans.get("steps") or []:
+        if _MARKER.match(s.get("text") or "") or not groups:
+            groups.append([])
+        groups[-1].append(s)
+    if len(groups) != n_parts or n_parts < 2:
+        return None
+    out = []
+    for g in groups:
+        marks = [s.get("marks") for s in g]
+        total = sum(marks) if all(m is not None for m in marks) else None
+        out.append({**ans, "steps": g, "marks_total": total, "style": "per_step",
+                    "answer_text": "\n".join(_MARKER.sub("", s["text"], count=1) for s in g),
+                    "split_from_combined": True})
+    return out
 
 
 def process_figures(pdf: Path, items: list[dict], fig_dir: Path, tag: str, structures: bool):
@@ -58,8 +86,23 @@ def main():
 
         ans_by_key = {key(a): a for a in answers}
         used = set()
+        # Sub-part questions whose scheme is one combined block (sub_part None): split it by order.
+        parts_by_qa = {}
         for q in questions:
-            a = ans_by_key.get(key(q))
+            if q.get("sub_part") and key(q) not in ans_by_key:
+                parts_by_qa.setdefault((str(q["q_no"]).strip(), q.get("or_alt", 0)), []).append(q)
+        split_ans = {}
+        for (qn, alt), qs in parts_by_qa.items():
+            combined_key = (qn, "", alt)
+            combined = ans_by_key.get(combined_key)
+            pieces = split_combined_answer(combined, len(qs)) if combined else None
+            if pieces:
+                used.add(combined_key)
+                for q, piece in zip(qs, pieces):
+                    piece["sub_part"] = q["sub_part"]
+                    split_ans[key(q)] = piece
+        for q in questions:
+            a = ans_by_key.get(key(q)) or split_ans.get(key(q))
             if a:
                 used.add(key(q))
             q["answer"] = a
