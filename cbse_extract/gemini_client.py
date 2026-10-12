@@ -17,6 +17,10 @@ NETWORK_ERRORS = ("ConnectError", "RemoteProtocolError", "ReadError", "ReadTimeo
 _client = None
 
 
+class EmptyResponseError(RuntimeError):
+    """The model returned no text at all (token limit hit while thinking, safety block, ...)."""
+
+
 class FatalAPIError(RuntimeError):
     """Retrying cannot help (bad key, no credits, retired model, quota exhausted): stop the batch."""
 
@@ -62,6 +66,7 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
             print(f"  ignoring corrupt cache file {cache_file.name}, re-fetching")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
+    empty = 0
     for attempt in range(6):
         try:
             resp = _get_client().models.generate_content(
@@ -73,6 +78,11 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
                     temperature=0.0,
                 ),
             )
+            if resp.parsed is None and not resp.text:
+                cand = resp.candidates[0] if getattr(resp, "candidates", None) else None
+                raise EmptyResponseError(
+                    f"empty response (finish_reason={getattr(cand, 'finish_reason', None)}, "
+                    f"prompt_feedback={getattr(resp, 'prompt_feedback', None)}, usage={_usage_dict(resp)})")
             result = resp.parsed if resp.parsed is not None else schema.model_validate_json(resp.text)
             usage = _usage_dict(resp)
             cache_file.write_text(result.model_dump_json(indent=1), encoding="utf-8")
@@ -80,6 +90,13 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
             time.sleep(min_interval)  # stay under free-tier requests/minute
             return result, usage
         except Exception as e:  # noqa: BLE001
+            if isinstance(e, EmptyResponseError):
+                empty += 1
+                if empty >= 3:
+                    raise  # per-PDF failure with the diagnostic; the batch continues
+                print(f"  {e}; retrying ({empty}/2)")
+                time.sleep(5)
+                continue
             code = getattr(e, "code", None)
             retryable = code in RETRYABLE_CODES if code is not None else (
                 type(e).__name__ in NETWORK_ERRORS or any(s in str(e) for s in ("429", "503", "UNAVAILABLE")))
