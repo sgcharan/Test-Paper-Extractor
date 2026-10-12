@@ -1,102 +1,29 @@
-# Test Paper Extractor (VLM-first)
+# CBSE Class 12 Chemistry paper extractor
 
-Vision-only pipeline for CBSE-style chemistry PDFs: render pages at high DPI, extract questions with a multimodal model, crop diagrams, and emit JSON with `{{STRUCTURE_N}}` placeholders and `render_assets` metadata.
+Works on digital and image-only (scanned) PDFs. Every page is sent to Gemini as an image;
+the text layer is added as a hint only when it looks reliable.
 
-## Requirements
+## Setup
+    pip install -r requirements.txt
+    export GEMINI_API_KEY=...        # free key from Google AI Studio
+    # optional: export GEMINI_MODEL=<model name>   (default gemini-2.5-flash)
 
-- **Poppler** (for `pdf2image`)
-  - **Kaggle**: `apt-get install -y poppler-utils` (see notebook)
-  - **Windows**: [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases) — pass `--poppler-path "C:\path\to\poppler\Library\bin"`
-- **Local smoke test**: [Ollama](https://ollama.com) with a vision model, e.g. `ollama pull qwen2.5vl`
-- **Kaggle (primary)**: GPU + `requirements.txt` (Qwen2.5-VL via Hugging Face)
+## Run
+Each PDF contains the questions followed by the answers / marking scheme at the end
+(marks shown against lines or groups of lines). One PDF = one paper:
+    pdfs/2024_set1.pdf
+    pdfs/2023_set2.pdf
 
-## Install
+    python -m cbse_extract.run --pdf-dir ./pdfs --out ./out
 
-```bash
-cd "Test Paper Extractor"
-pip install -r requirements-local.txt   # Windows + Ollama only
-# pip install -r requirements.txt       # Full install including Qwen HF
-```
+## Output (./out)
+- `<paper>.json`  questions with their answers and marking steps, per-page digital/image-only report, flags
+- `all.jsonl`     one question per line (use this as your dataset)
+- `figures/`      cropped structures/diagrams (question and answer)
+- `review.md`     everything that needs a human look
+- `cache/`        raw model responses; reruns are free, and a quota hit loses no progress
 
-## Single PDF (local Ollama)
-
-```bash
-python extract_paper.py --pdf path/to/paper.pdf --backend ollama --ollama-model qwen2.5vl:latest --poppler-path "C:\path\to\poppler\Library\bin"
-```
-
-Outputs under `out/<paper_slug>/`:
-
-- `questions.json`
-- `crops/*.png`
-- `checkpoint.json` (resume after interruption)
-- optional `pages/` with `--save-page-images`
-
-Resume from page 5 (0-based):
-
-```bash
-python extract_paper.py --pdf paper.pdf --start-page 5 --out-dir out/paper_slug
-```
-
-Preview:
-
-```bash
-python preview.py --questions out/paper_slug/questions.json
-```
-
-## Batch
-
-```bash
-python batch_extract.py path/to/pdf_folder --out-root out --backend qwen_hf --dpi 300
-```
-
-## Kaggle
-
-**PDFs** = Kaggle dataset. **Code** = public GitHub repo (cloned in the notebook).
-
-### 1. Put the code on GitHub
-
-Push this folder to a **public** repository, for example:
-
-`https://github.com/YOUR_USERNAME/test-paper-extractor`
-
-### 2. Upload PDFs as a Kaggle dataset
-
-Create a Kaggle dataset from a zip of your PDFs (subfolders are fine — extraction searches recursively). Note the dataset slug for `PDF_INPUT_DIR`.
-
-### 3. Run the notebook on Kaggle
-
-1. **New Notebook** → turn on **GPU** and **Internet**.
-2. **Add data** → select your PDF dataset only.
-3. **File → Import notebook** → choose [`kaggle/chemistry_extractor.ipynb`](kaggle/chemistry_extractor.ipynb) from this project.
-4. Edit two variables in the config cell:
-   - `GITHUB_REPO` → your public clone URL
-   - `PDF_INPUT_DIR` → `/kaggle/input/<your-pdf-dataset-slug>` (see “Datasets mounted” printout)
-5. **Run all** → download **`out.zip`** from the Output panel.
-
-To update extraction logic later, `git push` to GitHub and re-run the notebook (it clones fresh each time).
-
-**GPU memory (T4 15GB)**: defaults use **Qwen2.5-VL-3B** in 4-bit and resize pages to **1280px** for the VLM (crops still use full 300 DPI). If you still hit OOM, set `MAX_VLM_SIDE = 1024` or `--dpi 200` in the notebook.
-
-If `git clone` fails with *Unable to read current working directory*, use **Restart session** and run from the top (you re-ran the clone cell while the kernel was still inside the old clone folder).
-
-## Output shape
-
-Each question can reference cropped figures:
-
-```json
-{
-  "id": 14,
-  "section": "C",
-  "marks": 3,
-  "text": "Identify the major product ...\n\n{{STRUCTURE_1}}\n\n...",
-  "render_assets": [
-    {
-      "token": "{{STRUCTURE_1}}",
-      "image_path": "./crops/q14_structure_1.png",
-      "display_type": "block",
-      "recommended_width_px": 450,
-      "recommended_height_px": 200
-    }
-  ]
-}
-```
+## Free-tier notes
+- The script sleeps between calls and backs off on 429s. If the daily quota runs out, rerun the next day.
+- Fix the flagged items in review.md, and keep the corrected JSON as your gold set for few-shot prompts
+  or a later QLoRA fine-tune (Qwen2.5-VL on Kaggle/Colab with Unsloth).
