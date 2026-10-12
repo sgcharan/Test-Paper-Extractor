@@ -59,6 +59,8 @@ def crop_figure(pdf_path: Path, page_no: int, bbox, out_path: Path, pad: float =
     page = doc[page_no - 1]
     w, h = page.rect.width, page.rect.height
     ymin, xmin, ymax, xmax = [max(0.0, min(1000.0, float(v))) / 1000 for v in bbox]
+    ymin, ymax = sorted((ymin, ymax))  # the model occasionally returns min/max swapped
+    xmin, xmax = sorted((xmin, xmax))
     rect = fitz.Rect((xmin - pad) * w, (ymin - pad) * h, (xmax + pad) * w, (ymax + pad) * h) & page.rect
     if rect.is_empty or rect.width < 10 or rect.height < 10:
         return False

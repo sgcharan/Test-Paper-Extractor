@@ -9,6 +9,8 @@ import argparse
 import csv
 import json
 import re
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from .gemini_client import FatalAPIError, extract
@@ -100,7 +102,7 @@ def process_pdf(pdf: Path, out_dir: Path, cache: Path, fig_dir: Path, structures
         if q["flags"]:
             review.append((pid, q["q_no"], q.get("sub_part"), q["flags"]))
     orphans = [a for k, a in ans_by_key.items() if k not in used]
-    paper_flags = validate_paper(questions, orphans) if questions else ["no questions extracted"]
+    paper_flags = validate_paper(questions, orphans, paper.total_marks) if questions else ["no questions extracted"]
     for f in paper_flags:
         review.append((pid, "PAPER", None, [f]))
 
@@ -109,6 +111,19 @@ def process_pdf(pdf: Path, out_dir: Path, cache: Path, fig_dir: Path, structures
          "total_marks": paper.total_marks, "pages": page_report, "paper_flags": paper_flags,
          "usage": usage, "questions": questions, "orphan_answers": orphans}, ensure_ascii=False, indent=1), encoding="utf-8")
     return rows, review, usage
+
+
+def _worker(job):
+    """Runs in a worker process. Returns a tagged tuple instead of raising, so errors cross the process boundary."""
+    pdf, out_dir, cache, fig_dir, structures = job
+    t0 = time.time()
+    try:
+        rows, rev, usage = process_pdf(pdf, out_dir, cache, fig_dir, structures)
+        return ("ok", pdf.stem, rows, rev, usage, time.time() - t0)
+    except FatalAPIError as e:
+        return ("fatal", pdf.stem, str(e), None, None, time.time() - t0)
+    except Exception as e:  # noqa: BLE001  one bad PDF must not lose the rest of the batch
+        return ("fail", pdf.stem, f"{type(e).__name__}: {str(e)[:200]}", None, None, time.time() - t0)
 
 
 def write_usage(out_dir: Path, rows: list[dict]):
@@ -130,9 +145,13 @@ def main():
     ap.add_argument("--pdf-dir", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--structures", action="store_true", help="try DECIMER image->SMILES (optional install)")
+    ap.add_argument("--workers", type=int, default=1, help="PDFs processed in parallel (separate processes)")
+    ap.add_argument("--limit", type=int, default=None, help="only process the first N PDFs (sorted by name)")
     args = ap.parse_args()
 
     pdfs = sorted(args.pdf_dir.glob("**/*.pdf"))
+    if args.limit:
+        pdfs = pdfs[: args.limit]
 
     args.out.mkdir(parents=True, exist_ok=True)
     cache = args.out / "cache"
@@ -140,26 +159,39 @@ def main():
     all_rows, review = [], []
 
     usage_rows = []
+    done = 0
+    t_start = time.time()
+    results = {}
+    jobs = [(pdf, args.out, cache, fig_dir, args.structures) for pdf in pdfs]
     try:
-        for pdf in pdfs:
-            pid = pdf.stem
-            print(f"== {pid}")
-            try:
-                rows, rev, usage = process_pdf(pdf, args.out, cache, fig_dir, args.structures)
-            except FatalAPIError as e:
-                review.append((pid, "PAPER", None, [f"extraction aborted: {e}"]))
-                print(f"  FATAL, stopping batch: {e}")
-                break
-            except Exception as e:  # noqa: BLE001  one bad PDF must not lose the rest of the batch
-                review.append((pid, "PAPER", None, [f"extraction failed: {type(e).__name__}: {str(e)[:200]}"]))
-                print(f"  FAILED, continuing: {type(e).__name__}: {str(e)[:200]}")
-                continue
-            all_rows.extend(rows)
-            review.extend(rev)
-            usage_rows.append({"paper_id": pid, **usage})
-            print(f"  tokens: prompt {usage['prompt_tokens']:,} + output {usage['output_tokens']:,} "
-                  f"+ thinking {usage['thinking_tokens']:,} = {usage['total_tokens']:,}"
-                  f"{' (cached)' if usage.get('cached') else ''}")
+        # Rerunning is free for finished PDFs: _worker hits the on-disk cache (and its usage sidecar).
+        with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            futs = {pool.submit(_worker, j): j[0].stem for j in jobs}
+            for fut in as_completed(futs):
+                kind, pid, a, b, usage, secs = fut.result()
+                done += 1
+                prefix = f"[{done}/{len(jobs)}] {pid}"
+                if kind == "fatal":
+                    review.append((pid, "PAPER", None, [f"extraction aborted: {a}"]))
+                    print(f"{prefix}: FATAL, stopping batch: {a}")
+                    for f in futs:
+                        f.cancel()
+                    break
+                if kind == "fail":
+                    review.append((pid, "PAPER", None, [f"extraction failed: {a}"]))
+                    print(f"{prefix}: FAILED, continuing: {a}")
+                    continue
+                results[pid] = (a, b)
+                usage_rows.append({"paper_id": pid, **usage})
+                print(f"{prefix} ({secs:.0f}s) tokens: prompt {usage['prompt_tokens']:,} + "
+                      f"output {usage['output_tokens']:,} + thinking {usage['thinking_tokens']:,} = "
+                      f"{usage['total_tokens']:,}{' (cached)' if usage.get('cached') else ''}")
+        for pid in sorted(results):
+            all_rows.extend(results[pid][0])
+            review.extend(results[pid][1])
+        usage_rows.sort(key=lambda r: r["paper_id"])
+        print(f"Elapsed {(time.time() - t_start) / 60:.1f} min for {len(results)}/{len(jobs)} PDFs "
+              f"with {args.workers} worker(s)")
     finally:
         write_usage(args.out, usage_rows)
 

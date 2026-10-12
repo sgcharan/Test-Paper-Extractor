@@ -11,6 +11,9 @@ from .schemas import MODEL
 
 PROMPT_VERSION = "v4"  # bump to invalidate the cache after editing prompts
 RETRYABLE_CODES = (429, 500, 503, 504)
+# transport-level failures (DNS drop, reset, timeout) carry no HTTP code: retry them too
+NETWORK_ERRORS = ("ConnectError", "RemoteProtocolError", "ReadError", "ReadTimeout", "ConnectTimeout",
+                  "WriteError", "PoolTimeout", "ServerDisconnectedError", "ConnectionError", "TimeoutError")
 _client = None
 
 
@@ -78,8 +81,8 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
             return result, usage
         except Exception as e:  # noqa: BLE001
             code = getattr(e, "code", None)
-            retryable = code in RETRYABLE_CODES if code is not None else any(
-                s in str(e) for s in ("429", "503", "UNAVAILABLE"))
+            retryable = code in RETRYABLE_CODES if code is not None else (
+                type(e).__name__ in NETWORK_ERRORS or any(s in str(e) for s in ("429", "503", "UNAVAILABLE")))
             if code == 429 and "PerDay" in str(e):  # daily quota: backoff cannot help, stop the batch now
                 raise FatalAPIError(f"Gemini daily quota exhausted for {MODEL} (resets within 24h; "
                                     f"cache keeps progress): {str(e)[:300]}") from e
