@@ -77,12 +77,10 @@ class MarkingItem(BaseModel):
     figures: list[Figure] = Field(default_factory=list)
 
 
-class QuestionPaper(BaseModel):
+class Paper(BaseModel):
+    """One PDF: questions first, then the answers / marking scheme at the end."""
     exam_year: Optional[str] = None
     paper_code: Optional[str] = None
     total_marks: Optional[float] = None
-    items: list[QuestionItem]
-
-
-class MarkingScheme(BaseModel):
-    items: list[MarkingItem]
+    questions: list[QuestionItem]
+    answers: list[MarkingItem]

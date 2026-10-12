@@ -16,8 +16,15 @@ Rules:
 - Include every question/answer in the document, in order.
 """
 
-QP_PROMPT = COMMON + f"""
-This is a QUESTION PAPER. Extract every question into `items`.
+PAPER_PROMPT = COMMON + f"""
+Each document contains a QUESTION PAPER first, followed by its ANSWERS / MARKING SCHEME (usually at the
+end, after the questions). Extract both into ONE response:
+- `questions`: every question from the question-paper part.
+- `answers`: the answer for every question from the answer / marking-scheme part.
+Match them by using the same q_no / sub_part / or_alt in both lists. The answer part may be in a
+different order or format; use the question number printed there.
+
+QUESTIONS
 - section: the section letter (A-E) the question falls under, from the section headers.
 - marks: marks for that question (or sub-part if marked separately). qtype: mcq | assertion_reason | very_short | short | long | case_based.
 - For case-based questions: repeat the case passage at the start of question_text of each sub-question, set is_case_based = true.
@@ -27,12 +34,12 @@ This is a QUESTION PAPER. Extract every question into `items`.
   * Remembering/Understanding - recall of a fact, definition, name reaction, statement; explaining a concept.
   * Applying - numericals, predicting products, using a formula or rule in a new situation.
   * Analysing/Evaluating/Creating - reasoning 'why', comparing, interpreting data, multi-step inference, case-based inference.
-Also fill exam_year, paper_code, total_marks from the header if present.
-"""
+- Also fill exam_year, paper_code, total_marks from the header if present.
 
-MS_PROMPT = COMMON + """
-This is a MARKING SCHEME. Extract the answer to every question into `items`, keyed by q_no / sub_part / or_alt exactly as the scheme numbers them.
-- If marks are shown per line or step (e.g. 1/2, 1/2, 1), set style = per_step and list each line in `steps` with its marks.
+ANSWERS
+- Marks are printed against individual lines or groups of lines of a short/long answer (e.g. 1/2, 1, 1/2 + 1/2).
+  Then set style = per_step and list each line or group of lines, in order, as one entry in `steps`
+  (text + its marks). Marks like 1/2 must be 0.5.
 - If marks are given only for the whole answer, set style = whole, steps = [].
 - Always also fill answer_text with the complete answer and marks_total with the total marks.
 - For MCQs the answer_text is the correct option letter and its text.

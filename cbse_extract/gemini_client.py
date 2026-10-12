@@ -9,7 +9,7 @@ from google.genai import types
 
 from .schemas import MODEL
 
-PROMPT_VERSION = "v1"  # bump to invalidate the cache after editing prompts
+PROMPT_VERSION = "v2"  # bump to invalidate the cache after editing prompts
 _client = None
 
 

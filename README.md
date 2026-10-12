@@ -9,14 +9,15 @@ the text layer is added as a hint only when it looks reliable.
     # optional: export GEMINI_MODEL=<model name>   (default gemini-2.5-flash)
 
 ## Run
-Name files so the paper and its scheme pair up:
-    pdfs/2024_set1_qp.pdf
-    pdfs/2024_set1_ms.pdf
+Each PDF contains the questions followed by the answers / marking scheme at the end
+(marks shown against lines or groups of lines). One PDF = one paper:
+    pdfs/2024_set1.pdf
+    pdfs/2023_set2.pdf
 
     python -m cbse_extract.run --pdf-dir ./pdfs --out ./out
 
 ## Output (./out)
-- `<paper>.json`  questions with merged answers, per-page digital/image-only report, flags
+- `<paper>.json`  questions with their answers and marking steps, per-page digital/image-only report, flags
 - `all.jsonl`     one question per line (use this as your dataset)
 - `figures/`      cropped structures/diagrams (question and answer)
 - `review.md`     everything that needs a human look
