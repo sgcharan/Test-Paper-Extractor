@@ -26,7 +26,10 @@ def extract(pdf_path: Path, parts: list, prompt: str, schema, cache_dir: Path, m
     ).hexdigest()[:24]
     cache_file = cache_dir / f"{key}.json"
     if cache_file.exists():
-        return schema.model_validate_json(cache_file.read_text(encoding="utf-8"))
+        try:
+            return schema.model_validate_json(cache_file.read_text(encoding="utf-8"))
+        except ValueError:
+            print(f"  ignoring corrupt cache file {cache_file.name}, re-fetching")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     for attempt in range(6):
