@@ -79,3 +79,20 @@ def validate_paper(records: list[dict], orphan_answers: list[dict], declared_tot
             flags.append(f"duplicate question key {k}")
         seen.add(k)
     return flags
+
+
+def _plain(text: str) -> str:
+    """Strip LaTeX / mhchem markup so question text can be compared with a PDF text layer."""
+    t = re.sub(r"\\(?:ce|text|mathrm|times|rightarrow|to)\b", " ", text)
+    t = re.sub(r"[\\${}^_]", " ", t)
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def text_layer_similarity(question_text: str, page_text: str) -> float:
+    """Share of the question's words found on the page's text layer (0-1). Order-free on purpose:
+    layout and column order in the text layer is unreliable, and subscripts/arrows garble."""
+    words = [w for w in re.findall(r"[a-z]{3,}", _plain(question_text))]
+    if not words:
+        return 1.0
+    page_words = set(re.findall(r"[a-z]{3,}", page_text.lower()))
+    return sum(w in page_words for w in words) / len(words)
