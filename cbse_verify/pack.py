@@ -75,7 +75,7 @@ _CSS = """body{font:14px system-ui,sans-serif;margin:16px;max-width:1500px}
 .rec{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;border:1px solid #bbb;
 border-radius:6px;margin:14px 0;padding:10px}.rec img{max-width:100%;border:1px solid #ddd;margin-bottom:6px}
 .k{font-weight:600}pre{white-space:pre-wrap;background:#f6f6f6;padding:6px;border-radius:4px;margin:4px 0}
-.find{color:#a40;font-size:13px}.src{color:#555;font-size:12px}label{margin-right:10px}
+.find{color:#a40;font-size:13px}.src{color:#555;font-size:12px}.pat-row{margin:6px 0;padding:4px 6px;background:#fff6e0;border-radius:4px}label{margin-right:10px}
 .bar{position:sticky;top:0;background:#fff;padding:6px 0;border-bottom:1px solid #ccc}
 @media (prefers-color-scheme:dark){body{background:#161616;color:#ddd}pre{background:#222}.rec{border-color:#555}}"""
 
@@ -83,9 +83,11 @@ _JS = """
 const P='cbse_verdict:';
 function load(){document.querySelectorAll('.rec').forEach(r=>{try{const v=JSON.parse(localStorage.getItem(P+r.dataset.key)||'null');
  if(!v)return;r.querySelectorAll('input[value=ok],input[value=wrong]').forEach(i=>i.checked=(i.value===v.v));
- r.querySelectorAll('.fld').forEach(c=>c.checked=(v.fields||[]).includes(c.value));r.querySelector('.note').value=v.note||'';}catch(e){}});}
+ r.querySelectorAll('.fld').forEach(c=>c.checked=(v.fields||[]).includes(c.value));
+ r.querySelectorAll('.pat').forEach(c=>c.checked=(v.pattern||[]).includes(c.value));r.querySelector('.note').value=v.note||'';}catch(e){}});}
 function save(r){const v=(r.querySelector('input[value=ok]:checked')||r.querySelector('input[value=wrong]:checked'));
- const o={v:v?v.value:null,fields:[...r.querySelectorAll('.fld:checked')].map(c=>c.value),note:r.querySelector('.note').value};
+ const o={v:v?v.value:null,fields:[...r.querySelectorAll('.fld:checked')].map(c=>c.value),
+ pattern:[...r.querySelectorAll('.pat:checked')].map(c=>c.value),note:r.querySelector('.note').value};
  try{localStorage.setItem(P+r.dataset.key,JSON.stringify(o));}catch(e){}}
 document.addEventListener('change',e=>{const r=e.target.closest('.rec');if(r)save(r);});
 document.addEventListener('input',e=>{const r=e.target.closest('.rec');if(r)save(r);});
@@ -97,13 +99,18 @@ load();
 """
 
 
-def _row(pid, q, why, imgs, kind) -> str:
+def _row(pid, q, why, imgs, kind, siblings: str = "") -> str:
     a = q.get("answer") or {}
     key = _key(pid, q)
     k = checks.rec_key(q)
     steps = "; ".join(f"{s['text'][:60]} [{s['marks']}]" for s in (a.get("steps") or []))
     opts = "<br>".join(html.escape(o) for o in (q.get("options") or []))
     flds = "".join(f'<label><input type="checkbox" class="fld" value="{f}">{f}</label>' for f in FIELDS)
+    pat = ""
+    if k[1]:
+        pat = ('<div class="pat-row"><label><input type="checkbox" class="pat" value="split_subpart">'
+               'this question is split into sub-parts with their own marks (should be one question)</label></div>')
+    sib_html = f"<div class='src'>{html.escape(siblings)}</div>" if siblings else ""
     why_html = "".join(f"<div class='find'>[{html.escape(x.severity)}] {html.escape(x.check)}: "
                        f"{html.escape(x.detail)}</div>" for x in why)
     img_html = "".join(f'<div class="src">{html.escape(lbl)}</div><img src="{src}" loading="lazy">'
@@ -111,15 +118,29 @@ def _row(pid, q, why, imgs, kind) -> str:
     return (f'<div class="rec" data-key="{html.escape(key)}"><div>{img_html or "<i>no page image</i>"}</div><div>'
             f'<div class="k">Q{html.escape(k[0])}{html.escape(k[1])}{" (OR)" if k[2] else ""} '
             f'&middot; {q.get("marks")} marks &middot; {html.escape(str(q.get("qtype")))} &middot; '
-            f'{html.escape(str(q.get("chapter")))} &middot; {kind}</div>{why_html}'
+            f'{html.escape(str(q.get("chapter")))} &middot; {kind}</div>{sib_html}{why_html}'
             f'<pre>{html.escape(q.get("question_text") or "")}</pre>'
             + (f"<div class='k'>Options</div><pre>{opts}</pre>" if opts else "")
             + f"<div class='k'>Answer ({a.get('marks_total')} marks, p{a.get('page')})</div>"
               f"<pre>{html.escape(a.get('answer_text') or '(none)')}</pre>"
             + (f"<div class='src'>steps: {html.escape(steps)}</div>" if steps else "")
             + f'<div><label><input type="radio" name="{html.escape(key)}" value="ok">ok</label>'
-              f'<label><input type="radio" name="{html.escape(key)}" value="wrong">wrong</label> {flds}</div>'
+              f'<label><input type="radio" name="{html.escape(key)}" value="wrong">wrong</label> {flds}</div>{pat}'
               f'<input class="note" placeholder="note" style="width:90%"></div></div>')
+
+
+def sibling_summary(paper: dict) -> dict:
+    """(q_no, or_alt) -> 'Q28 is stored as 28a (2) + 28b (3) = 5 marks' for questions split into sub-parts."""
+    parts = defaultdict(list)
+    for q in paper["questions"]:
+        if q.get("sub_part"):
+            parts[(str(q["q_no"]), int(q.get("or_alt") or 0))].append((q["sub_part"], q.get("marks") or 0))
+    out = {}
+    for (qn, alt), ps in parts.items():
+        total = sum(m for _, m in ps)
+        body = " + ".join(f"{qn}{sp} ({m:g})" for sp, m in ps)
+        out[(qn, alt)] = f"Q{qn}{' (OR)' if alt else ''} is stored as {len(ps)} records: {body} = {total:g} marks"
+    return out
 
 
 def build_pack(papers, pdfs, findings, vdir: Path, pct: float) -> int:
@@ -141,6 +162,7 @@ def build_pack(papers, pdfs, findings, vdir: Path, pct: float) -> int:
     index = []
     for pid, rows in sorted(per_paper.items()):
         doc = fitz.open(pdfs[pid]) if pid in pdfs else None
+        sib = sibling_summary(papers[pid])
         body = []
         for q, why, kind in sorted(rows, key=lambda r: (r[0].get("page") or 0, str(r[0]["q_no"]))):
             imgs = []
@@ -152,7 +174,7 @@ def build_pack(papers, pdfs, findings, vdir: Path, pct: float) -> int:
                 if ap:
                     imgs.append((f"marking scheme, page {ap}",
                                  _image(doc, pid, ap, _locate(doc, ap, a.get("answer_text") or ""), img_dir)))
-            body.append(_row(pid, q, why, imgs, kind))
+            body.append(_row(pid, q, why, imgs, kind, sib.get((str(q["q_no"]), int(q.get("or_alt") or 0)), "")))
         (pack / f"{pid}.html").write_text(
             f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
             f"<title>{html.escape(pid)}</title><style>{_CSS}</style>"
@@ -196,6 +218,11 @@ def score(verdicts_path: Path, papers: dict, vdir: Path | None = None) -> str:
             w = sum(1 for v in sub.values() if v["v"] == "wrong")
             p, lo, hi = wilson(w, len(sub))
             L.append(f"{label}: {w}/{len(sub)} wrong = {p:.1%} (95% CI {lo:.1%}-{hi:.1%})")
+    pat = [k for k, v in done.items() if "split_subpart" in (v.get("pattern") or [])]
+    if pat:
+        L.append(f"split-into-sub-parts pattern ticked on {len(pat)} reviewed records "
+                 f"(across {len({tuple(k.split('|')[:2]) for k in pat})} questions); tracked separately, "
+                 "not counted as an extraction error")
     wrong = [v for v in done.values() if v["v"] == "wrong"]
     if wrong:
         from collections import Counter
