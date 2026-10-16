@@ -123,13 +123,28 @@ class PageText:
         return toks, "\n".join(txt), used
 
 
+def _pages_of(q: dict, answer: bool = False) -> list[int]:
+    """Pages a record spans. A merged question (cbse_merge) can have parts on several pages."""
+    if answer:
+        pgs = [(q.get("answer") or {}).get("page")]
+        for p in q.get("parts") or []:
+            pgs.append((p.get("answer") or {}).get("page"))
+            pgs.append(((p.get("or_alternative") or {}).get("answer") or {}).get("page"))
+    else:
+        pgs = [q.get("page")]
+        for p in q.get("parts") or []:
+            pgs.append(p.get("page"))
+            pgs.append((p.get("or_alternative") or {}).get("page"))
+    return sorted({int(x) for x in pgs if x})
+
+
 def _record_texts(q: dict):
     a = q.get("answer") or {}
-    yield "question", q.get("question_text") or "", q.get("page")
+    yield "question", q.get("question_text") or "", _pages_of(q)
     if q.get("options"):
-        yield "options", " ".join(q["options"]), q.get("page")
+        yield "options", " ".join(q["options"]), _pages_of(q)
     if a:
-        yield "answer", a.get("answer_text") or "", a.get("page")
+        yield "answer", a.get("answer_text") or "", _pages_of(q, answer=True)
 
 
 def check_anchoring(paper: dict, pages: PageText) -> list[Finding]:
@@ -144,13 +159,13 @@ def check_anchoring(paper: dict, pages: PageText) -> list[Finding]:
     for q in paper["questions"]:
         k = rec_key(q)
         short_answer = q.get("qtype") in ("mcq", "assertion_reason")
-        for field, text, page in _record_texts(q):
-            if not page:
+        for field, text, plist in _record_texts(q):
+            if not plist:
                 continue
             if field == "answer" and short_answer:
                 continue  # scheme gives only the option letter; the stored answer_text is the expanded option
-            page = int(page)
-            imgs = any(pages.has_images(p) for p in (page - 1, page, page + 1))
+            page = ", ".join(map(str, plist))
+            imgs = any(pages.has_images(p) for pg in plist for p in (pg - 1, pg, pg + 1))
             w = words(text)
             if len(w) >= 6 and len(doc_tokens) > 200:
                 recall = sum(1 for t in w if t in doc_tokens) / len(w)
@@ -167,7 +182,11 @@ def check_anchoring(paper: dict, pages: PageText) -> list[Finding]:
                     out.append(Finding(paper["paper_id"], k[0], k[1], k[2], field, "words",
                                        "low" if imgs else "medium", "error",
                                        f"word(s) not found anywhere in the source text: {odd}"))
-            src_tokens, _, used = pages.window(page)
+            src_tokens, used = set(), []
+            for pg in plist:
+                t, _, u = pages.window(pg)
+                src_tokens |= t
+                used += u
             if not used:
                 continue
             nums = [t for t in tokens(text) if re.fullmatch(r"\d+\.\d+|\d{3,}", t)]
@@ -226,6 +245,36 @@ def check_internal(paper: dict) -> list[Finding]:
     for o in paper.get("orphan_answers", []):
         out.append(Finding(pid, str(o["q_no"]), o.get("sub_part") or "", int(o.get("or_alt") or 0), "answer",
                            "orphan", "medium", "error", "marking-scheme entry matched no question"))
+    return out
+
+
+def check_parts(paper: dict) -> list[Finding]:
+    """Extra checks for merged questions (cbse_merge): every part needs an answer and the marks must add up."""
+    out = []
+    pid = paper["paper_id"]
+    for q in paper["questions"]:
+        parts = q.get("parts") or []
+        if not parts:
+            continue
+        k = rec_key(q)
+        for p in parts:
+            if not p.get("answer"):
+                out.append(Finding(pid, k[0], k[1], k[2], "answer", "parts", "medium", "error",
+                                   f"part ({p.get('sub_part')}) has no answer in the marking scheme"))
+        s = sum(p.get("marks") or 0 for p in parts)
+        if abs(s - (q.get("marks") or 0)) > 0.01:
+            out.append(Finding(pid, k[0], k[1], k[2], "marks", "parts", "medium", "error",
+                               f"parts add up to {s:g} but the question has {q.get('marks')} marks"))
+        # a note on any part ("part (ii) deleted, marks given to (i) and (iii)") explains its siblings too
+        noted = any(SOURCE_NOTE_RE.search((p.get("answer") or {}).get("answer_text") or "") for p in parts)
+        for p in parts:
+            a = p.get("answer") or {}
+            mt = a.get("marks_total")
+            if mt is not None and p.get("marks") is not None and abs(mt - p["marks"]) > 0.01:
+                out.append(Finding(pid, k[0], k[1], k[2], "marks", "parts", "low" if noted else "medium",
+                                   "source_anomaly" if noted else "error",
+                                   f"part ({p.get('sub_part')}) has {p['marks']:g} marks but its scheme gives {mt:g}"
+                                   + (" (scheme note: the paper itself is inconsistent)" if noted else "")))
     return out
 
 
@@ -313,6 +362,7 @@ def run_checks(papers: dict[str, dict], pdfs: dict[str, Path], progress=None) ->
         if progress:
             progress(i, len(papers), pid)
         findings += check_internal(paper)
+        findings += check_parts(paper)
         pdf = pdfs.get(pid)
         if pdf is None:
             findings.append(Finding(pid, "", "", 0, "paper", "anchor", "low", "error", "source PDF not found"))
