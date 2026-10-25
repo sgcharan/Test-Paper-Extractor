@@ -48,6 +48,7 @@ def validate_record(rec: dict) -> list[str]:
     for f in rec.get("figures", []):
         if not f.get("crop_path"):
             flags.append("figure bbox could not be cropped")
+        flags += f.get("flags", [])
     return flags
 
 
