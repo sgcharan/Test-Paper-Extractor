@@ -132,15 +132,53 @@ def _row(pid, q, why, imgs, kind, siblings: str = "") -> str:
 def sibling_summary(paper: dict) -> dict:
     """(q_no, or_alt) -> 'Q28 is stored as 28a (2) + 28b (3) = 5 marks' for questions split into sub-parts."""
     parts = defaultdict(list)
-    for q in paper["questions"]:
-        if q.get("sub_part"):
-            parts[(str(q["q_no"]), int(q.get("or_alt") or 0))].append((q["sub_part"], q.get("marks") or 0))
     out = {}
+    for q in paper["questions"]:
+        k = (str(q["q_no"]), int(q.get("or_alt") or 0))
+        if q.get("parts"):  # already merged by cbse_merge
+            ps = q["parts"]
+            body = " + ".join(f"({p['sub_part']}) {p.get('marks') or 0:g}" for p in ps)
+            has_or = [p["sub_part"] for p in ps if p.get("or_alternative")]
+            out[k] = (f"Q{k[0]}{' (OR)' if k[1] else ''} merged from {len(ps)} parts: {body} = "
+                      f"{sum(p.get('marks') or 0 for p in ps):g} marks"
+                      + (f"; part {', '.join(map(str, has_or))} has an OR alternative" if has_or else ""))
+        elif q.get("sub_part"):
+            parts[k].append((q["sub_part"], q.get("marks") or 0))
     for (qn, alt), ps in parts.items():
         total = sum(m for _, m in ps)
         body = " + ".join(f"{qn}{sp} ({m:g})" for sp, m in ps)
         out[(qn, alt)] = f"Q{qn}{' (OR)' if alt else ''} is stored as {len(ps)} records: {body} = {total:g} marks"
     return out
+
+
+def _record_images(doc, pid: str, q: dict, img_dir: Path, cap: int = 8) -> list:
+    """Page crops for a record. A merged question shows each part's question and scheme page (deduplicated)."""
+    units = []
+    if q.get("parts"):
+        for p in q["parts"]:
+            lab = f"part ({p.get('sub_part')}) "
+            units.append((lab + "question", p.get("page"), p.get("question_text")))
+            a = p.get("answer") or {}
+            units.append((lab + "marking scheme", a.get("page"), a.get("answer_text")))
+            alt = p.get("or_alternative") or {}
+            if alt:
+                units.append((lab + "OR question", alt.get("page"), alt.get("question_text")))
+                aa = alt.get("answer") or {}
+                units.append((lab + "OR marking scheme", aa.get("page"), aa.get("answer_text")))
+    else:
+        a = q.get("answer") or {}
+        units = [("question", q.get("page"), q.get("question_text")),
+                 ("marking scheme", a.get("page"), a.get("answer_text"))]
+    out, seen = [], set()
+    for label, page, text in units:
+        if not page:
+            continue
+        page = int(page)
+        src = _image(doc, pid, page, _locate(doc, page, text or ""), img_dir)
+        if src and src not in seen:
+            seen.add(src)
+            out.append((f"{label}, page {page}", src))
+    return out[:cap]
 
 
 def build_pack(papers, pdfs, findings, vdir: Path, pct: float) -> int:
@@ -165,15 +203,7 @@ def build_pack(papers, pdfs, findings, vdir: Path, pct: float) -> int:
         sib = sibling_summary(papers[pid])
         body = []
         for q, why, kind in sorted(rows, key=lambda r: (r[0].get("page") or 0, str(r[0]["q_no"]))):
-            imgs = []
-            if doc is not None:
-                a = q.get("answer") or {}
-                qp = int(q.get("page") or 0)
-                imgs.append((f"question, page {qp}", _image(doc, pid, qp, _locate(doc, qp, q.get("question_text") or ""), img_dir)))
-                ap = int(a.get("page") or 0)
-                if ap:
-                    imgs.append((f"marking scheme, page {ap}",
-                                 _image(doc, pid, ap, _locate(doc, ap, a.get("answer_text") or ""), img_dir)))
+            imgs = _record_images(doc, pid, q, img_dir) if doc is not None else []
             body.append(_row(pid, q, why, imgs, kind, sib.get((str(q["q_no"]), int(q.get("or_alt") or 0)), "")))
         (pack / f"{pid}.html").write_text(
             f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
@@ -204,28 +234,36 @@ def wilson(k: int, n: int, z: float = 1.96):
     return p, max(0.0, c - h), min(1.0, c + h)
 
 
+def _structural_only(v: dict) -> bool:
+    """'wrong' that only reports the sub-part split (pattern ticked, no content field ticked)."""
+    return v.get("v") == "wrong" and "split_subpart" in (v.get("pattern") or []) and not v.get("fields")
+
+
 def score(verdicts_path: Path, papers: dict, vdir: Path | None = None) -> str:
     verdicts = json.loads(Path(verdicts_path).read_text(encoding="utf-8"))
     manifest = {}
     if vdir and (Path(vdir) / "pack_manifest.json").exists():
         manifest = json.loads((Path(vdir) / "pack_manifest.json").read_text(encoding="utf-8"))
     done = {k: v for k, v in verdicts.items() if v.get("v") in ("ok", "wrong")}
-    L = [f"verdicts: {len(done)} records reviewed"]
+    struct = {k for k, v in done.items() if _structural_only(v)}
+    L = [f"verdicts: {len(done)} records reviewed "
+         f"({len(struct)} 'wrong' only because the question was split into sub-parts: structural, "
+         "counted separately and not as content errors)"]
     for kind, label in (("random", "random sample of unflagged records (unbiased estimate of the hidden error rate)"),
                         ("flagged", "flagged records (precision of the checks)")):
         sub = {k: v for k, v in done.items() if manifest.get(k) == kind}
         if sub:
-            w = sum(1 for v in sub.values() if v["v"] == "wrong")
+            w = sum(1 for k, v in sub.items() if v["v"] == "wrong" and k not in struct)
             p, lo, hi = wilson(w, len(sub))
-            L.append(f"{label}: {w}/{len(sub)} wrong = {p:.1%} (95% CI {lo:.1%}-{hi:.1%})")
+            L.append(f"{label}: {w}/{len(sub)} content errors = {p:.1%} (95% CI {lo:.1%}-{hi:.1%})"
+                     f"; structural: {sum(1 for k in sub if k in struct)}")
     pat = [k for k, v in done.items() if "split_subpart" in (v.get("pattern") or [])]
     if pat:
         L.append(f"split-into-sub-parts pattern ticked on {len(pat)} reviewed records "
-                 f"(across {len({tuple(k.split('|')[:2]) for k in pat})} questions); tracked separately, "
-                 "not counted as an extraction error")
-    wrong = [v for v in done.values() if v["v"] == "wrong"]
+                 f"(across {len({tuple(k.split('|')[:2]) for k in pat})} questions)")
+    wrong = [v for k, v in done.items() if v["v"] == "wrong" and k not in struct]
     if wrong:
         from collections import Counter
         c = Counter(f for v in wrong for f in v.get("fields", []))
-        L.append("fields marked wrong: " + ", ".join(f"{f}={n}" for f, n in c.most_common()))
+        L.append("content errors by field: " + (", ".join(f"{f}={n}" for f, n in c.most_common()) or "(no field ticked)"))
     return "\n".join(L)

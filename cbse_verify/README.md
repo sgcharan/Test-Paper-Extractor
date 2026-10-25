@@ -12,6 +12,13 @@ Options: `--sample 4` (percent of unflagged records added to the review pack), `
 `--selftest` (seed known errors and report how many are detected), `--llm-check` (optional second-model
 judge, costs tokens, uses its own cache), `--score verdicts.json`.
 
+## Works on both shapes
+Point `--out` at either the raw extraction (`out/full`, split sub-part records) or the merged output of
+`cbse_merge` (`out/full_merged`, one record per question with a `parts` list). On merged data the checks use the
+pages of every part, `parts` adds checks (a part without an answer, part marks adding up, part marks vs scheme),
+and the review pack shows each part's question and scheme page. The split-into-sub-parts tick box only appears
+on raw (unmerged) records.
+
 ## Outputs (`out/full_verify/`)
 - `verify_report.md` - counts by check and severity, worst papers, source anomalies
 - `verify_findings.csv` - one row per finding (paper, question, field, check, severity, bucket, detail)
@@ -35,4 +42,6 @@ merged or has a printing error.
 - Text-layer checks cannot verify image-only (scanned) pages or equations stored as images; those records
   appear only through consensus, the optional judge, and the review-pack sample.
 - A truncated answer (text missing, nothing wrong in what remains) is only partly detectable.
-- `--score` gives an unbiased error-rate estimate only from the *random* part of the sample.
+- `--score` gives an unbiased error-rate estimate only from the *random* part of the sample. A "wrong" verdict
+  that only has the split-into-sub-parts tick (no field ticked) is counted as structural, not as a content error.
+  On merged data, mark a record ok when its content is right and tick fields only for real content errors.
