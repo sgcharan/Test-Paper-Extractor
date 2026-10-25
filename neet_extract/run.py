@@ -12,10 +12,13 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+import fitz  # PyMuPDF
+
 from cbse_extract.gemini_client import FatalAPIError, RecitationBlocked, extract
 from cbse_extract.pdf_utils import build_parts, crop_figure
 from cbse_extract.run import write_usage
 
+from .figures import refine
 from .prompts import chunk_prompt
 from .schemas import NeetChunk
 from .validate import printed_answers, validate_paper, validate_record
@@ -95,11 +98,14 @@ def merge(chunks: list[NeetChunk], subject: str) -> list[dict]:
 
 
 def process_figures(pdf: Path, records: list[dict], fig_dir: Path, tag: str):
-    for r in records:
-        for n, fig in enumerate(r.get("figures", []), start=1):
-            out = fig_dir / f"{tag}_q{r['q_no']}_{fig.get('where', 'q')}_{n}.png"
-            if crop_figure(pdf, fig["page"], fig["bbox"], out):
-                fig["crop_path"] = str(out)
+    with fitz.open(pdf) as doc:
+        for r in records:
+            for n, fig in enumerate(r.get("figures", []), start=1):
+                ref = refine(doc, fig)
+                fig["crop_bbox"], fig["crop_method"], fig["flags"] = ref["crop_bbox"], ref["crop_method"], ref["flags"]
+                out = fig_dir / f"{tag}_q{r['q_no']}_{fig.get('where', 'q')}_{n}.png"
+                if crop_figure(pdf, fig["page"], fig["crop_bbox"], out, pad=0.0):
+                    fig["crop_path"] = str(out)
 
 
 def process_pdf(pdf: Path, out_dir: Path, cache: Path, fig_dir: Path, subject: str):
